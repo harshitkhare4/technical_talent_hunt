@@ -16,17 +16,32 @@ import {
 import confetti from 'canvas-confetti';
 import { TEAM_QUESTIONS } from './constants';
 import { cn } from './lib/utils';
+import { supabase, getSupabase } from './lib/supabase';
 
 type GameStatus = 'START' | 'PLAYING' | 'WON' | 'LOST';
 
+interface Question {
+  id: string | number;
+  question?: string; // From Supabase
+  text: string; // Used in UI
+  options: string[];
+  correct_answer?: number; // From Supabase
+  correctAnswer: number; // Used in UI
+  is_active?: boolean;
+  team?: string;
+  level?: number;
+  prize?: string;
+}
+
 const SOUNDS = {
-  CORRECT: 'https://assets.mixkit.co/active_storage/sfx/2014/2014-preview.mp3', // Triumphant orchestral hit
-  WRONG: 'https://assets.mixkit.co/active_storage/sfx/2004/2004-preview.mp3',   // Dramatic fail tone
-  TICK: 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3',    // Intense clock tick
-  NEW_QUESTION: 'https://assets.mixkit.co/active_storage/sfx/2017/2017-preview.mp3' // Suspenseful transition
+  CORRECT: 'https://assets.mixkit.co/active_storage/sfx/2014/2014-preview.mp3',
+  WRONG: 'https://assets.mixkit.co/active_storage/sfx/2004/2004-preview.mp3',
+  TICK: 'https://assets.mixkit.co/active_storage/sfx/2019/2019-preview.mp3',
+  NEW_QUESTION: 'https://assets.mixkit.co/active_storage/sfx/2017/2017-preview.mp3'
 };
 
 export default function App() {
+  // 1. State & Refs
   const [selectedTeam, setSelectedTeam] = useState<string>("Team A");
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<number | null>(null);
@@ -41,6 +56,11 @@ export default function App() {
   const [showPoll, setShowPoll] = useState(false);
   const [pollData, setPollData] = useState<number[]>([]);
   const [isReading, setIsReading] = useState(false);
+  const [activeQuestion, setActiveQuestion] = useState<Question | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAdminLogin, setShowAdminLogin] = useState(false);
+  const [adminPassword, setAdminPassword] = useState("");
+  const [allQuestions, setAllQuestions] = useState<Question[]>([]);
   const [scores, setScores] = useState<Record<string, number>>(() => {
     const initialScores: Record<string, number> = {};
     Object.keys(TEAM_QUESTIONS).forEach(team => {
@@ -48,14 +68,15 @@ export default function App() {
     });
     return initialScores;
   });
-  const bgMusic = useRef<HTMLAudioElement | null>(null);
 
+  const bgMusic = useRef<HTMLAudioElement | null>(null);
   const tickAudio = useRef<HTMLAudioElement | null>(null);
 
-  const playSound = (url: string) => {
+  // 2. Callbacks
+  const playSound = useCallback((url: string) => {
     const audio = new Audio(url);
     audio.play().catch(e => console.log('Audio play failed:', e));
-  };
+  }, []);
 
   const readQuestion = useCallback((text: string) => {
     window.speechSynthesis.cancel();
@@ -66,9 +87,6 @@ export default function App() {
     utterance.rate = 0.9;
     window.speechSynthesis.speak(utterance);
   }, []);
-
-  const quizQuestions = TEAM_QUESTIONS[selectedTeam];
-  const currentQuestion = quizQuestions[currentQuestionIndex];
 
   const handleGameOver = useCallback((won: boolean) => {
     window.speechSynthesis.cancel();
@@ -87,7 +105,7 @@ export default function App() {
       tickAudio.current.pause();
       tickAudio.current = null;
     }
-  }, []);
+  }, [playSound]);
 
   const moveToNextQuestion = useCallback(() => {
     const quizQuestions = TEAM_QUESTIONS[selectedTeam];
@@ -103,11 +121,176 @@ export default function App() {
         setShowPoll(false);
       }, 2000);
     }
-  }, [currentQuestionIndex, handleGameOver]);
+  }, [currentQuestionIndex, handleGameOver, selectedTeam]);
+
+  const goHome = useCallback(() => {
+    window.speechSynthesis.cancel();
+    setGameStatus('START');
+  }, []);
+
+  const handleAdminLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (adminPassword === "Horizon@2k26") { // Updated password
+      setIsAdmin(true);
+      setShowAdminLogin(false);
+      fetchAllQuestions();
+      alert("Admin Login Successful!");
+    } else {
+      alert("Incorrect Password!");
+    }
+  };
+
+  // 3. Supabase Logic
+  const fetchActiveQuestion = useCallback(async () => {
+    const client = getSupabase();
+    if (!client) return;
+
+    const { data, error } = await client
+      .from('questions')
+      .select('*')
+      .eq('is_active', true)
+      .single();
+
+    if (error) {
+      console.error('Error fetching active question:', error);
+      setActiveQuestion(null);
+    } else {
+      const q = data as any;
+      setActiveQuestion({
+        ...q,
+        text: q.question,
+        correctAnswer: q.correct_answer
+      } as Question);
+    }
+  }, []);
+
+  const fetchAllQuestions = useCallback(async () => {
+    const client = getSupabase();
+    if (!client) return;
+
+    const { data, error } = await client
+      .from('questions')
+      .select('*')
+      .order('level', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching all questions:', error);
+    } else {
+      setAllQuestions(data || []);
+    }
+  }, []);
+
+  const toggleQuestion = useCallback(async (id: string | number, currentStatus: boolean) => {
+    const client = getSupabase();
+    if (!client) return;
+
+    if (!currentStatus) {
+      await client
+        .from('questions')
+        .update({ is_active: false })
+        .neq('id', id);
+    }
+
+    const { error } = await client
+      .from('questions')
+      .update({ is_active: !currentStatus })
+      .eq('id', id);
+
+    if (error) console.error('Error toggling question:', error);
+    fetchAllQuestions();
+  }, [fetchAllQuestions]);
+
+  const seedQuestions = useCallback(async () => {
+    const client = getSupabase();
+    if (!client) return;
+
+    const allLocalQuestions: any[] = [];
+    Object.entries(TEAM_QUESTIONS).forEach(([team, questions]) => {
+      questions.forEach((q, index) => {
+        allLocalQuestions.push({
+          question: q.text,
+          options: q.options,
+          correct_answer: q.correctAnswer,
+          team: team,
+          level: index + 1,
+          is_active: false
+        });
+      });
+    });
+
+    const { error } = await client
+      .from('questions')
+      .insert(allLocalQuestions);
+
+    if (error) {
+      alert('Error seeding questions: ' + error.message);
+    } else {
+      alert('Successfully seeded ' + allLocalQuestions.length + ' questions to Supabase!');
+      fetchAllQuestions();
+    }
+  }, [fetchAllQuestions]);
+
+  const activateNextQuestion = useCallback(async () => {
+    if (allQuestions.length === 0) return;
+    
+    const currentIndex = activeQuestion 
+      ? allQuestions.findIndex(q => q.id === activeQuestion.id)
+      : -1;
+    
+    const nextQuestion = allQuestions[currentIndex + 1];
+    if (nextQuestion) {
+      await toggleQuestion(nextQuestion.id, false);
+    }
+  }, [allQuestions, activeQuestion, toggleQuestion]);
+
+  // 4. Effects
+  useEffect(() => {
+    const client = getSupabase();
+    if (!client) return;
+
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('admin') === 'true') {
+      setIsAdmin(true);
+      fetchAllQuestions();
+    }
+
+    fetchActiveQuestion();
+
+    const channel = client
+      .channel('questions_changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'questions' },
+        (payload) => {
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+            const updatedQuestion = payload.new as any;
+            if (updatedQuestion.is_active) {
+              setActiveQuestion({
+                ...updatedQuestion,
+                text: updatedQuestion.question,
+                correctAnswer: updatedQuestion.correct_answer
+              } as Question);
+              setSelectedOption(null);
+              setIsAnswerRevealed(false);
+              setTimeLeft(50);
+              setHiddenOptions([]);
+              setShowPoll(false);
+            } else if (activeQuestion?.id === updatedQuestion.id) {
+              setActiveQuestion(null);
+            }
+          }
+          if (isAdmin) fetchAllQuestions();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [isAdmin, activeQuestion?.id, fetchActiveQuestion, fetchAllQuestions]);
 
   useEffect(() => {
     if (gameStatus === 'PLAYING') {
-      // Suspenseful background music
       bgMusic.current = new Audio('https://cdn.pixabay.com/download/audio/2022/03/10/audio_783d1a0e02.mp3?filename=suspense-90479.mp3');
       bgMusic.current.loop = true;
       bgMusic.current.volume = 0.2;
@@ -142,18 +325,22 @@ export default function App() {
       moveToNextQuestion();
     }
     return () => clearInterval(timer);
-  }, [gameStatus, timeLeft, isAnswerRevealed, isReading, moveToNextQuestion]);
+  }, [gameStatus, timeLeft, isAnswerRevealed, isReading, moveToNextQuestion, playSound]);
+
+  const quizQuestions = TEAM_QUESTIONS[selectedTeam];
+  const currentQuestion = activeQuestion || quizQuestions[currentQuestionIndex];
 
   useEffect(() => {
-    if (gameStatus === 'PLAYING' && !isAnswerRevealed) {
+    if (gameStatus === 'PLAYING' && !isAnswerRevealed && currentQuestion) {
       setIsReading(true);
       playSound(SOUNDS.NEW_QUESTION);
       setTimeout(() => {
         readQuestion(currentQuestion.text);
       }, 1000);
     }
-  }, [currentQuestionIndex, gameStatus, currentQuestion.text, readQuestion]);
+  }, [currentQuestionIndex, gameStatus, currentQuestion?.text, readQuestion, isAnswerRevealed, playSound, currentQuestion]);
 
+  // 5. Handlers
   const handleOptionClick = (index: number) => {
     if (isAnswerRevealed || hiddenOptions.includes(index)) return;
     setSelectedOption(index);
@@ -174,7 +361,9 @@ export default function App() {
       } else {
         playSound(SOUNDS.WRONG);
       }
-      moveToNextQuestion();
+      if (!activeQuestion) {
+        moveToNextQuestion();
+      }
     }, 1500);
   };
 
@@ -224,15 +413,117 @@ export default function App() {
     setShowPoll(false);
   };
 
-  const goHome = () => {
-    window.speechSynthesis.cancel();
-    setGameStatus('START');
-  };
+  const renderAdminLoginModal = () => (
+    <AnimatePresence>
+      {showAdminLogin && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="max-w-sm w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl space-y-6"
+          >
+            <div className="text-center space-y-2">
+              <div className="w-12 h-12 bg-blue-500/10 text-blue-500 rounded-full flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <h2 className="text-xl font-bold">Admin Login</h2>
+              <p className="text-sm text-gray-400">Enter password to access control panel</p>
+            </div>
+
+            <form onSubmit={handleAdminLogin} className="space-y-4">
+              <input 
+                type="password" 
+                value={adminPassword}
+                onChange={(e) => setAdminPassword(e.target.value)}
+                placeholder="Enter Admin Password"
+                className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl focus:border-blue-500 outline-none transition-all text-center font-mono text-white"
+                autoFocus
+              />
+              <div className="flex gap-3">
+                <button 
+                  type="button"
+                  onClick={() => setShowAdminLogin(false)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 rounded-xl font-bold transition-all text-white"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit"
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-xl font-bold transition-all text-white"
+                >
+                  Login
+                </button>
+              </div>
+            </form>
+          </motion.div>
+        </div>
+      )}
+    </AnimatePresence>
+  );
+
+  // 6. Early Returns (ONLY after all hooks)
+  if (!getSupabase()) {
+    return (
+      <div className="min-h-screen bg-[#020617] text-white flex items-center justify-center p-8">
+        <div className="max-w-md w-full bg-slate-900 border border-slate-800 p-8 rounded-2xl text-center space-y-6">
+          <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto">
+            <Info className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-bold">Supabase Not Configured</h2>
+          <p className="text-gray-400">
+            Please set the <code className="text-blue-400">VITE_SUPABASE_URL</code> and <code className="text-blue-400">VITE_SUPABASE_ANON_KEY</code> environment variables to start the hunt.
+          </p>
+          <div className="text-sm text-slate-500 bg-slate-950 p-4 rounded-lg text-left font-mono">
+            1. Go to Settings<br/>
+            2. Add Environment Variables<br/>
+            3. Restart Dev Server
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (gameStatus === 'PLAYING' && !activeQuestion && !isAdmin) {
+    return (
+      <div className="min-h-screen bg-[#020617] text-white flex items-center justify-center p-8">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="text-center space-y-6 max-w-md"
+        >
+          <div className="relative w-24 h-24 mx-auto">
+            <div className="absolute inset-0 border-4 border-blue-500/20 rounded-full"></div>
+            <div className="absolute inset-0 border-4 border-blue-500 rounded-full border-t-transparent animate-spin"></div>
+            <Timer className="absolute inset-0 m-auto w-10 h-10 text-blue-500" />
+          </div>
+          <h2 className="text-3xl font-bold tracking-tight">Wait for the next question</h2>
+          <p className="text-gray-400">The admin will release the next challenge shortly. Stay focused!</p>
+          <div className="flex flex-col gap-3">
+            <button 
+              onClick={goHome}
+              className="px-8 py-3 bg-slate-900 border border-slate-800 hover:border-slate-700 transition-all rounded-xl font-bold text-sm flex items-center justify-center gap-2 mx-auto w-full"
+            >
+              <Home className="w-4 h-4" /> BACK TO HOME
+            </button>
+            {!isAdmin && (
+              <button 
+                onClick={() => setShowAdminLogin(true)}
+                className="text-[10px] text-slate-700 hover:text-blue-500 transition-colors uppercase font-bold tracking-tighter"
+              >
+                Admin Access
+              </button>
+            )}
+          </div>
+        </motion.div>
+        {renderAdminLoginModal()}
+      </div>
+    );
+  }
 
   if (gameStatus === 'START') {
     return (
       <div className="min-h-screen bg-[#020617] flex items-center justify-center p-4 font-sans text-white relative overflow-hidden">
-        {/* Background Image with Overlay */}
         <div className="absolute inset-0 z-0">
           <img 
             src="https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&q=80&w=1920" 
@@ -254,7 +545,17 @@ export default function App() {
           </div>
           <div className="space-y-4">
             <div className="space-y-1 mb-6">
-              <p className="text-blue-500 font-black tracking-widest text-2xl uppercase">BTIRT presents</p>
+              <div className="flex items-center justify-center gap-4 mb-2">
+                <p className="text-blue-500 font-black tracking-widest text-2xl uppercase">BTIRT presents</p>
+                {!isAdmin && (
+                  <button 
+                    onClick={() => setShowAdminLogin(true)}
+                    className="text-[10px] text-slate-700 hover:text-blue-500 transition-colors uppercase font-bold tracking-tighter"
+                  >
+                    Admin Access
+                  </button>
+                )}
+              </div>
               <h2 className="text-2xl font-black tracking-widest text-white uppercase">HORIZON 2k26</h2>
               <p className="text-slate-500 font-bold text-sm uppercase tracking-[0.3em]">Cultural Fest</p>
             </div>
@@ -266,7 +567,6 @@ export default function App() {
             </p>
           </div>
 
-          {/* Team Selection */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {Object.keys(TEAM_QUESTIONS).map((team) => (
               <button
@@ -284,7 +584,6 @@ export default function App() {
             ))}
           </div>
 
-          {/* Leaderboard */}
           <div className="bg-slate-900/30 border border-slate-800/50 rounded-2xl p-4">
             <h3 className="text-gray-500 font-bold uppercase tracking-widest text-[10px] mb-3 flex items-center gap-2">
               <Trophy className="w-3 h-3" /> Live Leaderboard
@@ -308,7 +607,6 @@ export default function App() {
             START HUNT
           </button>
 
-          {/* Game Rules & Lifelines Section */}
           <div className="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 text-left space-y-6 backdrop-blur-sm max-h-[350px] overflow-y-auto custom-scrollbar">
             <div className="space-y-4">
               <h3 className="text-blue-500 font-bold uppercase tracking-widest text-xs flex items-center gap-2">
@@ -377,6 +675,7 @@ export default function App() {
             </div>
           </div>
         </motion.div>
+        {renderAdminLoginModal()}
       </div>
     );
   }
@@ -423,9 +722,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#020617] text-white flex flex-col lg:flex-row overflow-hidden">
-      {/* Main Game Area */}
       <div className="flex-1 flex flex-col p-4 lg:p-8 relative">
-        {/* Header: Lifelines & Timer */}
         <div className="flex items-center justify-between mb-8">
           <div className="flex gap-2 lg:gap-4">
             {selectedTeam !== "FFF" && selectedTeam !== "Tie Breaker" && (
@@ -497,11 +794,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Question Area */}
         <div className="flex-1 flex flex-col justify-center max-w-4xl mx-auto w-full space-y-12">
           <AnimatePresence mode="wait">
             <motion.div
-              key={currentQuestion.id}
+              key={currentQuestion?.id || 'empty'}
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
@@ -512,13 +808,13 @@ export default function App() {
                 <div className="relative bg-slate-900 border border-slate-800 p-8 rounded-2xl text-center">
                   <span className="text-blue-500 font-mono text-sm mb-2 block uppercase tracking-widest">Level {currentQuestionIndex + 1}</span>
                   <h2 className="text-2xl lg:text-3xl font-bold leading-tight">
-                    {currentQuestion.text}
+                    {currentQuestion?.text}
                   </h2>
                 </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {currentQuestion.options.map((option, index) => (
+                {currentQuestion?.options.map((option, index) => (
                   <OptionButton
                     key={index}
                     label={String.fromCharCode(65 + index)}
@@ -551,7 +847,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Lifeline Overlays */}
         <AnimatePresence>
           {showPoll && (
             <motion.div 
@@ -586,7 +881,6 @@ export default function App() {
         </AnimatePresence>
       </div>
 
-      {/* Sidebar: Progress Tree */}
       <div className="w-full lg:w-80 bg-slate-900/50 border-l border-slate-800 p-4 lg:p-6 flex flex-col">
         <div className="flex items-center justify-between mb-6 px-2">
           <h3 className="text-gray-500 font-bold text-xs uppercase tracking-widest">Hunt Progress</h3>
@@ -616,6 +910,60 @@ export default function App() {
           ))}
         </div>
       </div>
+
+      {isAdmin && (
+        <div className="fixed bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-800 p-4 z-50 max-h-[40vh] overflow-y-auto custom-scrollbar">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-blue-500 uppercase tracking-widest text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" /> Admin Control Panel
+              </h3>
+              <div className="flex items-center gap-4">
+                <button
+                  onClick={seedQuestions}
+                  className="px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-lg text-[10px] font-bold uppercase hover:bg-blue-500/20 transition-all"
+                >
+                  Seed Questions
+                </button>
+                <button
+                  onClick={activateNextQuestion}
+                  className="px-4 py-1.5 bg-yellow-500 text-black rounded-lg text-[10px] font-bold uppercase hover:bg-yellow-400 transition-all"
+                >
+                  Release Next Question
+                </button>
+                <span className="text-[10px] text-gray-500">Admin Mode Active</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {allQuestions.map((q) => (
+                <div key={q.id} className={cn(
+                  "p-3 rounded-xl border transition-all flex flex-col justify-between gap-2",
+                  q.is_active ? "bg-blue-600/10 border-blue-500" : "bg-slate-950 border-slate-800"
+                )}>
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-start">
+                      <span className="text-[10px] font-mono text-gray-500">{q.team} - Lvl {q.level}</span>
+                      {q.is_active && <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded uppercase font-bold">Active</span>}
+                    </div>
+                    <p className="text-xs font-medium line-clamp-2">{q.question}</p>
+                  </div>
+                  <button
+                    onClick={() => toggleQuestion(q.id, !!q.is_active)}
+                    className={cn(
+                      "w-full py-1.5 rounded-lg text-[10px] font-bold uppercase transition-all",
+                      q.is_active ? "bg-red-600 hover:bg-red-500" : "bg-blue-600 hover:bg-blue-500"
+                    )}
+                  >
+                    {q.is_active ? "Deactivate" : "Activate"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {renderAdminLoginModal()}
     </div>
   );
 }
@@ -677,7 +1025,6 @@ const OptionButton: React.FC<OptionButtonProps> = ({ label, text, selected, corr
       </span>
       <span className="font-medium text-lg truncate">{text}</span>
       
-      {/* Sparkle effect on correct */}
       {correct && (
         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent animate-[shimmer_2s_infinite]"></div>
       )}
