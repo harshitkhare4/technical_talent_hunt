@@ -1,0 +1,5 @@
+{
+  "name": "Technical Talent Hunt",
+  "description": "A KBC-style tech trivia game with 15 questions and lifelines.",
+  "requestFramePermissions": []
+}
