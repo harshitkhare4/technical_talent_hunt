@@ -413,9 +413,6 @@ export default function App() {
       timer = setInterval(() => {
         setTimeLeft((prev) => {
           const next = prev - 1;
-          if (next > 0) {
-            playSound(SOUNDS.TICK);
-          }
           return next;
         });
       }, 1000);
