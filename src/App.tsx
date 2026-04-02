@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI, Modality } from "@google/genai";
 import { 
   Trophy, 
   Timer, 
@@ -61,6 +62,7 @@ export default function App() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminPassword, setAdminPassword] = useState("");
   const [allQuestions, setAllQuestions] = useState<Question[]>([]);
+  const [isGeminiReading, setIsGeminiReading] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>(() => {
     const initialScores: Record<string, number> = {};
     Object.keys(TEAM_QUESTIONS).forEach(team => {
@@ -71,12 +73,109 @@ export default function App() {
 
   const bgMusic = useRef<HTMLAudioElement | null>(null);
   const tickAudio = useRef<HTMLAudioElement | null>(null);
+  const audioContext = useRef<AudioContext | null>(null);
+  const audioSource = useRef<AudioBufferSourceNode | null>(null);
 
   // 2. Callbacks
   const playSound = useCallback((url: string) => {
     const audio = new Audio(url);
     audio.play().catch(e => console.log('Audio play failed:', e));
   }, []);
+
+  const stopReading = useCallback(() => {
+    window.speechSynthesis.cancel();
+    if (audioSource.current) {
+      try {
+        audioSource.current.stop();
+      } catch (e) {
+        // Source might already be stopped
+      }
+      audioSource.current = null;
+    }
+    setIsReading(false);
+    setIsGeminiReading(false);
+  }, []);
+
+  const readQuestionWithGemini = useCallback(async (text: string, options: string[]) => {
+    try {
+      stopReading();
+      setIsGeminiReading(true);
+      setIsReading(true);
+      
+      if (!audioContext.current) {
+        audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+      }
+      
+      if (audioContext.current.state === 'suspended') {
+        await audioContext.current.resume();
+      }
+
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const prompt = `Read this quiz question clearly: ${text}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: prompt }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Kore' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (base64Audio) {
+        const binaryString = atob(base64Audio);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+
+        // Gemini TTS returns raw 16-bit PCM (2 bytes per sample)
+        // We need to convert it to Float32 for Web Audio API
+        const pcmData = new Int16Array(bytes.buffer);
+        const float32Data = new Float32Array(pcmData.length);
+        for (let i = 0; i < pcmData.length; i++) {
+          float32Data[i] = pcmData[i] / 32768.0;
+        }
+
+        if (!audioContext.current) {
+          audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+        }
+        
+        const buffer = audioContext.current.createBuffer(1, float32Data.length, 24000);
+        buffer.getChannelData(0).set(float32Data);
+        
+        const source = audioContext.current.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.current.destination);
+        source.onended = () => {
+          setIsReading(false);
+          setIsGeminiReading(false);
+          audioSource.current = null;
+        };
+        audioSource.current = source;
+        source.start(0);
+      } else {
+        throw new Error("No audio data received");
+      }
+    } catch (error) {
+      console.error("Gemini TTS failed, falling back to browser TTS:", error);
+      setIsGeminiReading(false);
+      // Fallback to browser TTS
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(`${text}. Option A: ${options[0]}. Option B: ${options[1]}. Option C: ${options[2]}. Option D: ${options[3]}.`);
+      utterance.onstart = () => setIsReading(true);
+      utterance.onend = () => setIsReading(false);
+      utterance.onerror = () => setIsReading(false);
+      utterance.rate = 0.9;
+      window.speechSynthesis.speak(utterance);
+    }
+  }, [stopReading]);
 
   const readQuestion = useCallback((text: string) => {
     window.speechSynthesis.cancel();
@@ -89,7 +188,7 @@ export default function App() {
   }, []);
 
   const handleGameOver = useCallback((won: boolean) => {
-    window.speechSynthesis.cancel();
+    stopReading();
     if (won) {
       setGameStatus('WON');
       confetti({
@@ -124,9 +223,9 @@ export default function App() {
   }, [currentQuestionIndex, handleGameOver, selectedTeam]);
 
   const goHome = useCallback(() => {
-    window.speechSynthesis.cancel();
+    stopReading();
     setGameStatus('START');
-  }, []);
+  }, [stopReading]);
 
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
@@ -313,19 +412,24 @@ export default function App() {
     if (gameStatus === 'PLAYING' && timeLeft > 0 && !isAnswerRevealed && !isReading) {
       timer = setInterval(() => {
         setTimeLeft((prev) => {
-          if (prev <= 6 && prev > 0) {
+          const next = prev - 1;
+          if (next > 0) {
             playSound(SOUNDS.TICK);
           }
-          return prev - 1;
+          return next;
         });
       }, 1000);
-    } else if (timeLeft === 0 && gameStatus === 'PLAYING' && !isAnswerRevealed) {
+    }
+    return () => clearInterval(timer);
+  }, [gameStatus, isAnswerRevealed, isReading, playSound]);
+
+  useEffect(() => {
+    if (timeLeft === 0 && gameStatus === 'PLAYING' && !isAnswerRevealed) {
       setIsAnswerRevealed(true);
       playSound(SOUNDS.WRONG);
       moveToNextQuestion();
     }
-    return () => clearInterval(timer);
-  }, [gameStatus, timeLeft, isAnswerRevealed, isReading, moveToNextQuestion, playSound]);
+  }, [timeLeft, gameStatus, isAnswerRevealed, moveToNextQuestion, playSound]);
 
   const quizQuestions = TEAM_QUESTIONS[selectedTeam];
   const currentQuestion = activeQuestion || quizQuestions[currentQuestionIndex];
@@ -333,12 +437,9 @@ export default function App() {
   useEffect(() => {
     if (gameStatus === 'PLAYING' && !isAnswerRevealed && currentQuestion) {
       setIsReading(true);
-      playSound(SOUNDS.NEW_QUESTION);
-      setTimeout(() => {
-        readQuestion(currentQuestion.text);
-      }, 1000);
+      readQuestionWithGemini(currentQuestion.text, currentQuestion.options);
     }
-  }, [currentQuestionIndex, gameStatus, currentQuestion?.text, readQuestion, isAnswerRevealed, playSound, currentQuestion]);
+  }, [currentQuestionIndex, gameStatus, currentQuestion?.text, readQuestionWithGemini, isAnswerRevealed, currentQuestion]);
 
   // 5. Handlers
   const handleOptionClick = (index: number) => {
@@ -348,7 +449,7 @@ export default function App() {
 
   const confirmAnswer = () => {
     if (selectedOption === null) return;
-    window.speechSynthesis.cancel();
+    stopReading();
     setIsAnswerRevealed(true);
 
     setTimeout(() => {
@@ -786,7 +887,7 @@ export default function App() {
               </svg>
               <span className={cn(
                 "absolute text-xl font-bold",
-                timeLeft <= 10 && "animate-pulse text-red-500"
+                isReading ? "text-blue-400" : (timeLeft <= 10 ? "animate-pulse text-red-500" : "text-white")
               )}>
                 {timeLeft}
               </span>
@@ -806,7 +907,9 @@ export default function App() {
               <div className="relative">
                 <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-indigo-600 blur opacity-25"></div>
                 <div className="relative bg-slate-900 border border-slate-800 p-8 rounded-2xl text-center">
-                  <span className="text-blue-500 font-mono text-sm mb-2 block uppercase tracking-widest">Level {currentQuestionIndex + 1}</span>
+                  <div className="flex items-center justify-center gap-2 mb-2">
+                    <span className="text-blue-500 font-mono text-sm uppercase tracking-widest">Level {currentQuestionIndex + 1}</span>
+                  </div>
                   <h2 className="text-2xl lg:text-3xl font-bold leading-tight">
                     {currentQuestion?.text}
                   </h2>
