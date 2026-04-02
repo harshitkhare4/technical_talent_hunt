@@ -168,7 +168,7 @@ export default function App() {
       setIsGeminiReading(false);
       // Fallback to browser TTS
       window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(`${text}. Option A: ${options[0]}. Option B: ${options[1]}. Option C: ${options[2]}. Option D: ${options[3]}.`);
+      const utterance = new SpeechSynthesisUtterance(text);
       utterance.onstart = () => setIsReading(true);
       utterance.onend = () => setIsReading(false);
       utterance.onerror = () => setIsReading(false);
@@ -1018,21 +1018,6 @@ export default function App() {
               <h3 className="font-bold text-blue-500 uppercase tracking-widest text-xs flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4" /> Admin Control Panel
               </h3>
-              <div className="flex items-center gap-4">
-                <button
-                  onClick={seedQuestions}
-                  className="px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-lg text-[10px] font-bold uppercase hover:bg-blue-500/20 transition-all"
-                >
-                  Seed Questions
-                </button>
-                <button
-                  onClick={activateNextQuestion}
-                  className="px-4 py-1.5 bg-yellow-500 text-black rounded-lg text-[10px] font-bold uppercase hover:bg-yellow-400 transition-all"
-                >
-                  Release Next Question
-                </button>
-                <span className="text-[10px] text-gray-500">Admin Mode Active</span>
-              </div>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {allQuestions.map((q) => (
