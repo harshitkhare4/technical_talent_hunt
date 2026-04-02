@@ -224,6 +224,17 @@ export default function App() {
     }
   }, [currentQuestionIndex, handleGameOver, selectedTeam]);
 
+  const jumpToQuestion = useCallback((index: number) => {
+    stopReading();
+    setCurrentQuestionIndex(index);
+    setSelectedOption(null);
+    setIsAnswerRevealed(false);
+    setTimeLeft(50);
+    setHiddenOptions([]);
+    setShowPoll(false);
+    setIsPaused(false);
+  }, [stopReading]);
+
   const goHome = useCallback(() => {
     stopReading();
     setGameStatus('START');
@@ -1021,12 +1032,13 @@ export default function App() {
         </div>
         <div className="flex-1 flex flex-col-reverse gap-1">
           {TEAM_QUESTIONS[selectedTeam].map((q, i) => (
-            <div 
+            <button 
               key={q.id}
+              onClick={() => jumpToQuestion(i)}
               className={cn(
-                "flex items-center justify-between px-4 py-2 rounded-lg text-sm font-medium transition-colors",
+                "flex items-center justify-between px-4 py-2 rounded-lg text-sm font-medium transition-all cursor-pointer hover:bg-slate-800/50 group w-full text-left",
                 currentQuestionIndex === i 
-                  ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20 scale-105 z-10" 
+                  ? "bg-blue-600 text-white shadow-lg shadow-blue-600/20 scale-105 z-10 hover:bg-blue-600" 
                   : i < currentQuestionIndex 
                     ? "text-green-500" 
                     : "text-gray-500",
@@ -1035,11 +1047,13 @@ export default function App() {
             >
               <div className="flex items-center gap-3">
                 <span className="w-4 text-right opacity-50">{i + 1}</span>
-                <span>Level {i + 1}</span>
+                <span className="group-hover:translate-x-1 transition-transform">Level {i + 1}</span>
               </div>
-              {i < currentQuestionIndex && <CheckCircle2 className="w-4 h-4" />}
-              {currentQuestionIndex === i && <ChevronRight className="w-4 h-4 animate-pulse" />}
-            </div>
+              <div className="flex items-center gap-2">
+                {i < currentQuestionIndex && <CheckCircle2 className="w-4 h-4" />}
+                {currentQuestionIndex === i && <ChevronRight className="w-4 h-4 animate-pulse" />}
+              </div>
+            </button>
           ))}
         </div>
       </div>
