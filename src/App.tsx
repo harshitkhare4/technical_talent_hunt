@@ -12,7 +12,9 @@ import {
   Play,
   Info,
   RotateCcw,
-  Home
+  Home,
+  Pause,
+  ArrowRight
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { TEAM_QUESTIONS } from './constants';
@@ -63,6 +65,7 @@ export default function App() {
   const [adminPassword, setAdminPassword] = useState("");
   const [allQuestions, setAllQuestions] = useState<Question[]>([]);
   const [isGeminiReading, setIsGeminiReading] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
   const [scores, setScores] = useState<Record<string, number>>(() => {
     const initialScores: Record<string, number> = {};
     Object.keys(TEAM_QUESTIONS).forEach(team => {
@@ -211,14 +214,13 @@ export default function App() {
     if (currentQuestionIndex === quizQuestions.length - 1) {
       handleGameOver(true);
     } else {
-      setTimeout(() => {
-        setCurrentQuestionIndex((prev) => prev + 1);
-        setSelectedOption(null);
-        setIsAnswerRevealed(false);
-        setTimeLeft(50);
-        setHiddenOptions([]);
-        setShowPoll(false);
-      }, 2000);
+      setCurrentQuestionIndex((prev) => prev + 1);
+      setSelectedOption(null);
+      setIsAnswerRevealed(false);
+      setTimeLeft(50);
+      setHiddenOptions([]);
+      setShowPoll(false);
+      setIsPaused(false);
     }
   }, [currentQuestionIndex, handleGameOver, selectedTeam]);
 
@@ -409,7 +411,7 @@ export default function App() {
 
   useEffect(() => {
     let timer: NodeJS.Timeout;
-    if (gameStatus === 'PLAYING' && timeLeft > 0 && !isAnswerRevealed && !isReading) {
+    if (gameStatus === 'PLAYING' && timeLeft > 0 && !isAnswerRevealed && !isReading && !isPaused) {
       timer = setInterval(() => {
         setTimeLeft((prev) => {
           const next = prev - 1;
@@ -418,15 +420,14 @@ export default function App() {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [gameStatus, isAnswerRevealed, isReading, playSound]);
+  }, [gameStatus, isAnswerRevealed, isReading, isPaused]);
 
   useEffect(() => {
     if (timeLeft === 0 && gameStatus === 'PLAYING' && !isAnswerRevealed) {
       setIsAnswerRevealed(true);
       playSound(SOUNDS.WRONG);
-      moveToNextQuestion();
     }
-  }, [timeLeft, gameStatus, isAnswerRevealed, moveToNextQuestion, playSound]);
+  }, [timeLeft, gameStatus, isAnswerRevealed, playSound]);
 
   const quizQuestions = TEAM_QUESTIONS[selectedTeam];
   const currentQuestion = activeQuestion || quizQuestions[currentQuestionIndex];
@@ -458,9 +459,6 @@ export default function App() {
         }));
       } else {
         playSound(SOUNDS.WRONG);
-      }
-      if (!activeQuestion) {
-        moveToNextQuestion();
       }
     }, 1500);
   };
@@ -503,6 +501,7 @@ export default function App() {
     setSelectedOption(null);
     setIsAnswerRevealed(false);
     setTimeLeft(50);
+    setIsPaused(false);
     setLifelines({
       fiftyFifty: true,
       audiencePoll: true
@@ -856,39 +855,56 @@ export default function App() {
               <div className="text-3xl font-black text-blue-500 tabular-nums">{scores[selectedTeam]}</div>
             </div>
 
-            <div className="relative flex items-center justify-center">
-              <svg className="w-16 h-16 transform -rotate-90">
-                <circle
-                  cx="32"
-                  cy="32"
-                  r="28"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                  fill="transparent"
-                  className="text-slate-800"
-                />
-                <circle
-                  cx="32"
-                  cy="32"
-                  r="28"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                  fill="transparent"
-                  strokeDasharray={175.9}
-                  strokeDashoffset={175.9 - (timeLeft / 50) * 175.9}
-                  className={cn(
-                    "transition-all duration-1000",
-                    timeLeft > 10 ? "text-blue-500" : "text-red-500"
-                  )}
-                />
-              </svg>
-              <span className={cn(
-                "absolute text-xl font-bold",
-                isReading ? "text-blue-400" : (timeLeft <= 10 ? "animate-pulse text-red-500" : "text-white")
-              )}>
-                {timeLeft}
-              </span>
-            </div>
+            <AnimatePresence>
+              {!isReading && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsPaused(!isPaused)}
+                    className="w-10 h-10 rounded-full border border-slate-700 flex items-center justify-center hover:bg-slate-800 transition-colors"
+                    title={isPaused ? "Resume" : "Pause"}
+                  >
+                    {isPaused ? <Play className="w-4 h-4 fill-current" /> : <Pause className="w-4 h-4 fill-current" />}
+                  </button>
+                  <motion.div 
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    className="relative flex items-center justify-center"
+                  >
+                    <svg className="w-16 h-16 transform -rotate-90">
+                      <circle
+                        cx="32"
+                        cy="32"
+                        r="28"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                        fill="transparent"
+                        className="text-slate-800"
+                      />
+                      <circle
+                        cx="32"
+                        cy="32"
+                        r="28"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                        fill="transparent"
+                        strokeDasharray={175.9}
+                        strokeDashoffset={175.9 - (timeLeft / 50) * 175.9}
+                        className={cn(
+                          "transition-all duration-1000",
+                          timeLeft > 10 ? "text-blue-500" : "text-red-500"
+                        )}
+                      />
+                    </svg>
+                    <span className={cn(
+                      "absolute text-xl font-bold",
+                      timeLeft <= 10 ? "animate-pulse text-red-500" : "text-white"
+                    )}>
+                      {timeLeft}
+                    </span>
+                  </motion.div>
+                </div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -913,37 +929,54 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {currentQuestion?.options.map((option, index) => (
-                  <OptionButton
-                    key={index}
-                    label={String.fromCharCode(65 + index)}
-                    text={option}
-                    selected={selectedOption === index}
-                    correct={isAnswerRevealed && index === currentQuestion.correctAnswer}
-                    wrong={isAnswerRevealed && selectedOption === index && index !== currentQuestion.correctAnswer}
-                    disabled={isAnswerRevealed || hiddenOptions.includes(index)}
-                    hidden={hiddenOptions.includes(index)}
-                    onClick={() => handleOptionClick(index)}
-                  />
-                ))}
-              </div>
+              <AnimatePresence>
+                {!isReading && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="grid grid-cols-1 md:grid-cols-2 gap-4"
+                  >
+                    {currentQuestion?.options.map((option, index) => (
+                      <OptionButton
+                        key={index}
+                        label={String.fromCharCode(65 + index)}
+                        text={option}
+                        selected={selectedOption === index}
+                        correct={isAnswerRevealed && index === currentQuestion.correctAnswer}
+                        wrong={isAnswerRevealed && selectedOption === index && index !== currentQuestion.correctAnswer}
+                        disabled={isAnswerRevealed || hiddenOptions.includes(index)}
+                        hidden={hiddenOptions.includes(index)}
+                        onClick={() => handleOptionClick(index)}
+                      />
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </motion.div>
           </AnimatePresence>
 
-          <div className="flex justify-center">
-            <button
-              onClick={confirmAnswer}
-              disabled={selectedOption === null || isAnswerRevealed}
-              className={cn(
-                "px-12 py-4 rounded-full font-bold text-lg transition-all transform active:scale-95",
-                selectedOption !== null && !isAnswerRevealed
-                  ? "bg-yellow-500 text-black hover:bg-yellow-400 shadow-lg shadow-yellow-500/20"
-                  : "bg-slate-800 text-slate-500 cursor-not-allowed"
-              )}
-            >
-              LOCK ANSWER
-            </button>
+          <div className="flex flex-col items-center gap-4">
+            {!isAnswerRevealed ? (
+              <button
+                onClick={confirmAnswer}
+                disabled={selectedOption === null}
+                className={cn(
+                  "px-12 py-4 rounded-full font-bold text-lg transition-all transform active:scale-95",
+                  selectedOption !== null
+                    ? "bg-yellow-500 text-black hover:bg-yellow-400 shadow-lg shadow-yellow-500/20"
+                    : "bg-slate-800 text-slate-500 cursor-not-allowed"
+                )}
+              >
+                LOCK ANSWER
+              </button>
+            ) : (
+              <button
+                onClick={moveToNextQuestion}
+                className="px-12 py-4 bg-blue-600 text-white hover:bg-blue-500 rounded-full font-bold text-lg transition-all transform active:scale-95 flex items-center gap-2 shadow-lg shadow-blue-600/20"
+              >
+                NEXT QUESTION <ArrowRight className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </div>
 
