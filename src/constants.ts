@@ -80,7 +80,13 @@ export const TEAM_QUESTIONS: Record<string, Question[]> = {
     { id: 2, text: "Which salt is neutral?", options: ["NaCl", "HCl", "NaOH", "NH₄Cl"], correctAnswer: 0, prize: "Round 1" },
     { id: 3, text: "Which atom has smallest size?", options: ["Hydrogen", "Helium", "Oxygen", "Carbon"], correctAnswer: 1, prize: "Round 1" },
     { id: 4, text: "GPS stands for:", options: ["Global Positioning System", "General Position System", "Global Power System", "None"], correctAnswer: 0, prize: "Round 1" },
-    { id: 5, text: "1 Byte =", options: ["4 bits", "8 bits", "16 bits", "32 bits"], correctAnswer: 1, prize: "Round 1" }
+    { id: 5, text: "1 Byte =", options: ["4 bits", "8 bits", "16 bits", "32 bits"], correctAnswer: 1, prize: "Round 1" },
+    { id: 6, text: "Which part of the computer is called the \"brain\"?", options: ["RAM", "Hard Disk", "CPU", "Monitor"], correctAnswer: 2, prize: "Round 1" },
+    { id: 7, text: "Which planet is known as the Red Planet?", options: ["Earth", "Mars", "Jupiter", "Venus"], correctAnswer: 1, prize: "Round 1" },
+    { id: 8, text: "Which device is used to store data permanently?", options: ["RAM", "Cache", "Hard Disk", "Register"], correctAnswer: 2, prize: "Round 1" },
+    { id: 9, text: "Which vitamin is produced in human skin by sunlight?", options: ["Vitamin A", "Vitamin B", "Vitamin C", "Vitamin D"], correctAnswer: 3, prize: "Round 1" },
+    { id: 10, text: "What is the unit of electric current?", options: ["Volt", "Ampere", "Watt", "Ohm"], correctAnswer: 1, prize: "Round 1" },
+    { id: 11, text: "Which scientist is known for the theory of relativity?", options: ["Isaac Newton", "Albert Einstein", "Galileo Galilei", "Nikola Tesla"], correctAnswer: 1, prize: "Round 1" }
   ],
   "Tie Breaker": [
     { id: 1, text: "Cloud computing is:", options: ["Offline storage", "Internet-based service", "Hardware", "None"], correctAnswer: 1, prize: "Tie Breaker" },

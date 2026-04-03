@@ -78,6 +78,8 @@ export default function App() {
   const tickAudio = useRef<HTMLAudioElement | null>(null);
   const audioContext = useRef<AudioContext | null>(null);
   const audioSource = useRef<AudioBufferSourceNode | null>(null);
+  const lastReadQuestionId = useRef<string | number | null>(null);
+  const isGeminiQuotaExhausted = useRef(false);
 
   // 2. Callbacks
   const playSound = useCallback((url: string) => {
@@ -99,12 +101,35 @@ export default function App() {
     setIsGeminiReading(false);
   }, []);
 
-  const readQuestionWithGemini = useCallback(async (text: string, options: string[]) => {
+  const readQuestionWithGemini = useCallback(async (text: string, options: string[], questionId?: string | number) => {
+    if (questionId && lastReadQuestionId.current === questionId) return;
+    if (questionId) lastReadQuestionId.current = questionId;
+
+    const fallbackToBrowser = () => {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.onstart = () => setIsReading(true);
+      utterance.onend = () => setIsReading(false);
+      utterance.onerror = () => setIsReading(false);
+      utterance.rate = 0.9;
+      window.speechSynthesis.speak(utterance);
+    };
+
+    if (isGeminiQuotaExhausted.current) {
+      fallbackToBrowser();
+      return;
+    }
+
     try {
       stopReading();
       setIsGeminiReading(true);
       setIsReading(true);
       
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new Error("Gemini API key is missing. Falling back to browser voice.");
+      }
+
       if (!audioContext.current) {
         audioContext.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       }
@@ -113,7 +138,7 @@ export default function App() {
         await audioContext.current.resume();
       }
 
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey });
       const prompt = `Read this quiz question clearly: ${text}`;
 
       const response = await ai.models.generateContent({
@@ -138,8 +163,6 @@ export default function App() {
           bytes[i] = binaryString.charCodeAt(i);
         }
 
-        // Gemini TTS returns raw 16-bit PCM (2 bytes per sample)
-        // We need to convert it to Float32 for Web Audio API
         const pcmData = new Int16Array(bytes.buffer);
         const float32Data = new Float32Array(pcmData.length);
         for (let i = 0; i < pcmData.length; i++) {
@@ -166,17 +189,23 @@ export default function App() {
       } else {
         throw new Error("No audio data received");
       }
-    } catch (error) {
-      console.error("Gemini TTS failed, falling back to browser TTS:", error);
+    } catch (error: any) {
+      const errorMsg = error?.message?.toLowerCase() || "";
+      const isQuotaError = 
+        errorMsg.includes('429') || 
+        errorMsg.includes('quota') || 
+        errorMsg.includes('resource_exhausted') ||
+        error?.status === 'RESOURCE_EXHAUSTED';
+
+      if (isQuotaError) {
+        console.warn("Gemini TTS quota exhausted, switching to browser voice.");
+        isGeminiQuotaExhausted.current = true;
+      } else {
+        console.error("Gemini TTS failed:", error);
+      }
+      
       setIsGeminiReading(false);
-      // Fallback to browser TTS
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.onstart = () => setIsReading(true);
-      utterance.onend = () => setIsReading(false);
-      utterance.onerror = () => setIsReading(false);
-      utterance.rate = 0.9;
-      window.speechSynthesis.speak(utterance);
+      fallbackToBrowser();
     }
   }, [stopReading]);
 
@@ -435,10 +464,14 @@ export default function App() {
 
   useEffect(() => {
     if (timeLeft === 0 && gameStatus === 'PLAYING' && !isAnswerRevealed) {
-      setIsAnswerRevealed(true);
-      playSound(SOUNDS.WRONG);
+      if (selectedTeam === "FFF") {
+        moveToNextQuestion();
+      } else {
+        setIsAnswerRevealed(true);
+        playSound(SOUNDS.WRONG);
+      }
     }
-  }, [timeLeft, gameStatus, isAnswerRevealed, playSound]);
+  }, [timeLeft, gameStatus, isAnswerRevealed, playSound, selectedTeam, moveToNextQuestion]);
 
   const quizQuestions = TEAM_QUESTIONS[selectedTeam];
   const currentQuestion = activeQuestion || quizQuestions[currentQuestionIndex];
@@ -446,9 +479,9 @@ export default function App() {
   useEffect(() => {
     if (gameStatus === 'PLAYING' && !isAnswerRevealed && currentQuestion) {
       setIsReading(true);
-      readQuestionWithGemini(currentQuestion.text, currentQuestion.options);
+      readQuestionWithGemini(currentQuestion.text, currentQuestion.options, currentQuestion.id);
     }
-  }, [currentQuestionIndex, gameStatus, currentQuestion?.text, readQuestionWithGemini, isAnswerRevealed, currentQuestion]);
+  }, [currentQuestionIndex, gameStatus, currentQuestion?.text, readQuestionWithGemini, isAnswerRevealed, currentQuestion?.id]);
 
   // 5. Handlers
   const handleOptionClick = (index: number) => {
@@ -941,7 +974,7 @@ export default function App() {
               </div>
 
               <AnimatePresence>
-                {!isReading && (
+                {!isReading && selectedTeam !== "FFF" && (
                   <motion.div 
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -967,26 +1000,28 @@ export default function App() {
           </AnimatePresence>
 
           <div className="flex flex-col items-center gap-4">
-            {!isAnswerRevealed ? (
-              <button
-                onClick={confirmAnswer}
-                disabled={selectedOption === null}
-                className={cn(
-                  "px-12 py-4 rounded-full font-bold text-lg transition-all transform active:scale-95",
-                  selectedOption !== null
-                    ? "bg-yellow-500 text-black hover:bg-yellow-400 shadow-lg shadow-yellow-500/20"
-                    : "bg-slate-800 text-slate-500 cursor-not-allowed"
-                )}
-              >
-                LOCK ANSWER
-              </button>
-            ) : (
-              <button
-                onClick={moveToNextQuestion}
-                className="px-12 py-4 bg-blue-600 text-white hover:bg-blue-500 rounded-full font-bold text-lg transition-all transform active:scale-95 flex items-center gap-2 shadow-lg shadow-blue-600/20"
-              >
-                NEXT QUESTION <ArrowRight className="w-5 h-5" />
-              </button>
+            {selectedTeam !== "FFF" && (
+              !isAnswerRevealed ? (
+                <button
+                  onClick={confirmAnswer}
+                  disabled={selectedOption === null}
+                  className={cn(
+                    "px-12 py-4 rounded-full font-bold text-lg transition-all transform active:scale-95",
+                    selectedOption !== null
+                      ? "bg-yellow-500 text-black hover:bg-yellow-400 shadow-lg shadow-yellow-500/20"
+                      : "bg-slate-800 text-slate-500 cursor-not-allowed"
+                  )}
+                >
+                  LOCK ANSWER
+                </button>
+              ) : (
+                <button
+                  onClick={moveToNextQuestion}
+                  className="px-12 py-4 bg-blue-600 text-white hover:bg-blue-500 rounded-full font-bold text-lg transition-all transform active:scale-95 flex items-center gap-2 shadow-lg shadow-blue-600/20"
+                >
+                  NEXT QUESTION <ArrowRight className="w-5 h-5" />
+                </button>
+              )
             )}
           </div>
         </div>
